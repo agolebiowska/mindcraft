@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        #loadingIndicator {
+          display: none;
+          font-size: 18px;
+          margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+<script src="https://unpkg.com/gojs@3.0.7/release/go.js"></script>
+
+<script id="code">
+  function init() {
+    const $ = go.GraphObject.make;
+
+    myDiagram = new go.Diagram('myDiagramDiv', {
+      'commandHandler.copiesTree': true,
+      'commandHandler.copiesParentKey': true,
+      'commandHandler.deletesTree': true,
+      'draggingTool.dragsTree': true,
+      'undoManager.isEnabled': true,
+    });
+
+    myDiagram.addDiagramListener('Modified', (e) => {
+      var idx = document.title.indexOf('*');
+      if (myDiagram.isModified) {
+        if (idx < 0) document.title += '*';
+      } else {
+        if (idx >= 0) document.title = document.title.slice(0, idx);
+      }
+    });
+
+    myDiagram.nodeTemplate = $(go.Node,
+      'Vertical',
+      { selectionObjectName: 'TEXT' },
+      $(go.TextBlock,
+        {
+          name: 'TEXT',
+          minSize: new go.Size(30, 15),
+          editable: true,
+        },
+        new go.Binding('text', 'text').makeTwoWay(),
+        new go.Binding('scale', 'scale').makeTwoWay(),
+        new go.Binding('font', 'font').makeTwoWay()
+      ),
+      $(go.Shape,
+        'LineH',
+        {
+          stretch: go.Stretch.Horizontal,
+          strokeWidth: 3,
+          height: 3,
+          portId: '',
+          fromSpot: go.Spot.LeftRightSides,
+          toSpot: go.Spot.LeftRightSides,
+        },
+        new go.Binding('stroke', 'brush'),
+        new go.Binding('fromSpot', 'dir', (d) => spotConverter(d, true)),
+        new go.Binding('toSpot', 'dir', (d) => spotConverter(d, false))
+      ),
+      new go.Binding('location', 'loc', go.Point.parse).makeTwoWay(go.Point.stringify),
+      new go.Binding('locationSpot', 'dir', (d) => spotConverter(d, false))
+    );
+
+    myDiagram.nodeTemplate.selectionAdornmentTemplate = $(go.Adornment,
+      'Spot',
+      $(go.Panel,
+        'Auto',
+        $(go.Shape, { fill: null, stroke: 'dodgerblue', strokeWidth: 3 }),
+        $(go.Placeholder, { margin: new go.Margin(4, 4, 0, 4) })
+      ),
+      $('Button',
+        {
+          alignment: go.Spot.Right,
+          alignmentFocus: go.Spot.Left,
+          click: addNodeAndLink,
+        },
+        $(go.TextBlock,
+          '+',
+          { font: 'bold 8pt sans-serif' }
+        )
+      )
+    );
+
+    myDiagram.nodeTemplate.contextMenu = $('ContextMenu',
+      $('ContextMenuButton', $(go.TextBlock, 'Bigger'), { click: (e, obj) => changeTextSize(obj, 1.1) }),
+      $('ContextMenuButton', $(go.TextBlock, 'Smaller'), { click: (e, obj) => changeTextSize(obj, 1 / 1.1) }),
+      $('ContextMenuButton', $(go.TextBlock, 'Bold/Normal'), { click: (e, obj) => toggleTextWeight(obj) }),
+      $('ContextMenuButton', $(go.TextBlock, 'Copy'), { click: (e, obj) => e.diagram.commandHandler.copySelection() }),
+      $('ContextMenuButton', $(go.TextBlock, 'Delete'), { click: (e, obj) => e.diagram.commandHandler.deleteSelection() }),
+      $('ContextMenuButton', $(go.TextBlock, 'Undo'), { click: (e, obj) => e.diagram.commandHandler.undo() }),
+      $('ContextMenuButton', $(go.TextBlock, 'Redo'), { click: (e, obj) => e.diagram.commandHandler.redo() }),
+      $('ContextMenuButton', $(go.TextBlock, 'Layout'), {
+        click: (e, obj) => {
+          var adorn = obj.part;
+          adorn.diagram.startTransaction('Subtree Layout');
+          layoutTree(adorn.adornedPart);
+          adorn.diagram.commitTransaction('Subtree Layout');
+        },
+      })
+    );
+
+    myDiagram.linkTemplate = $(go.Link,
+      {
+        curve: go.Curve.Bezier,
+        fromShortLength: -2,
+        toShortLength: -2,
+        selectable: false,
+      },
+      $(go.Shape,
+        { strokeWidth: 3 },
+        new go.Binding('stroke', 'toNode', (n) => {
+          if (n.data.brush) return n.data.brush;
+          return 'black';
+        }).ofObject()
+      )
+    );
+
+    myDiagram.contextMenu = $('ContextMenu',
+      $('ContextMenuButton',
+        $(go.TextBlock, 'Paste'),
+        { click: (e, obj) => e.diagram.commandHandler.pasteSelection(e.diagram.toolManager.contextMenuTool.mouseDownPoint) },
+        new go.Binding(
+          'visible',
+          '',
+          (o) => o.diagram && o.diagram.commandHandler.canPasteSelection(o.diagram.toolManager.contextMenuTool.mouseDownPoint)
+        ).ofObject()
+      ),
+      $('ContextMenuButton',
+        $(go.TextBlock, 'Undo'),
+        { click: (e, obj) => e.diagram.commandHandler.undo() },
+        new go.Binding('visible', '', (o) => o.diagram && o.diagram.commandHandler.canUndo()).ofObject()
+      ),
+      $('ContextMenuButton',
+        $(go.TextBlock, 'Redo'),
+        { click: (e, obj) => e.diagram.commandHandler.redo() },
+        new go.Binding('visible', '', (o) => o.diagram && o.diagram.commandHandler.canRedo()).ofObject()
+      ),
+      $('ContextMenuButton', $(go.TextBlock, 'Save'), { click: (e, obj) => save() }),
+      $('ContextMenuButton', $(go.TextBlock, 'Load'), { click: (e, obj) => load() })
+    );
+
+    myDiagram.addDiagramListener('SelectionMoved', (e) => {
+      var rootX = myDiagram.findNodeForKey(0).location.x;
+      myDiagram.selection.each((node) => {
+        if (node.data.parent !== 0) return;
+        var nodeX = node.location.x;
+        if (rootX < nodeX && node.data.dir !== 'right') {
+          updateNodeDirection(node, 'right');
+        } else if (rootX > nodeX && node.data.dir !== 'left') {
+          updateNodeDirection(node, 'left');
+        }
+        layoutTree(node);
+      });
+    });
+  }
+
+  function spotConverter(dir, from) {
+    if (dir === 'left') {
+      return from ? go.Spot.Left : go.Spot.Right;
+    } else {
+      return from ? go.Spot.Right : go.Spot.Left;
+    }
+  }
+
+  function changeTextSize(obj, factor) {
+    var adorn = obj.part;
+    adorn.diagram.startTransaction('Change Text Size');
+    var node = adorn.adornedPart;
+    var tb = node.findObject('TEXT');
+    tb.scale *= factor;
+    adorn.diagram.commitTransaction('Change Text Size');
+  }
+
+  function toggleTextWeight(obj) {
+    var adorn = obj.part;
+    adorn.diagram.startTransaction('Change Text Weight');
+    var node = adorn.adornedPart;
+    var tb = node.findObject('TEXT');
+    var idx = tb.font.indexOf('bold');
+    if (idx < 0) {
+      tb.font = 'bold ' + tb.font;
+    } else {
+      tb.font = tb.font.slice(idx + 5);
+    }
+    adorn.diagram.commitTransaction('Change Text Weight');
+  }
+
+  function updateNodeDirection(node, dir) {
+    myDiagram.model.setDataProperty(node.data, 'dir', dir);
+    var chl = node.findTreeChildrenNodes();
+    while (chl.next()) {
+      updateNodeDirection(chl.value, dir);
+    }
+  }
+
+  function addNodeAndLink(e, obj) {
+    var adorn = obj.part;
+    var diagram = adorn.diagram;
+    diagram.startTransaction('Add Node');
+    var oldnode = adorn.adornedPart;
+    var olddata = oldnode.data;
+    var newdata = { text: 'idea', brush: olddata.brush, dir: olddata.dir, parent: olddata.key };
+    diagram.model.addNodeData(newdata);
+    layoutTree(oldnode);
+    diagram.commitTransaction('Add Node');
+    var newnode = diagram.findNodeForData(newdata);
+    if (newnode !== null) diagram.scrollToRect(newnode.actualBounds);
+  }
+
+  function layoutTree(node) {
+    if (node.isTreeRoot) {
+      layoutAll();
+    } else {
+      var parts = node.findTreeParts();
+      layoutAngle(parts, node.data.dir === 'left' ? 180 : 0);
+    }
+  }
+
+  function layoutAngle(parts, angle) {
+    var layout = new go.TreeLayout({
+      angle: angle,
+      arrangement: go.TreeArrangement.FixedRoots,
+      nodeSpacing: 5,
+      layerSpacing: 20,
+      setsPortSpot: false,
+      setsChildPortSpot: false,
+    });
+    layout.doLayout(parts);
+  }
+
+  function layoutAll() {
+    var root = myDiagram.findTreeRoots().first();
+    if (root === null) return;
+    myDiagram.startTransaction('Layout');
+    var rightward = new go.Set();
+    var leftward = new go.Set();
+    root.findLinksConnected().each((link) => {
+      var child = link.toNode;
+      if (child.data.dir === 'left') {
+        leftward.add(root);
+        leftward.add(link);
+        leftward.addAll(child.findTreeParts());
+      } else {
+        rightward.add(root);
+        rightward.add(link);
+        rightward.addAll(child.findTreeParts());
+      }
+    });
+    layoutAngle(rightward, 0);
+    layoutAngle(leftward, 180);
+    myDiagram.commitTransaction('Layout');
+  }
+
+  function save() {
+    const mapData = myDiagram.model.toJson();
+    const blob = new Blob([mapData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const mapName = prompt("Enter the name of the map (without extension):", "mind_map");
+    if (mapName) {
+      a.download = mapName + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function load() {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.json';
+    fileInput.onchange = (event) => {
+      const file = event.target.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      fetch('/load_map', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => {
+        myDiagram.model = go.Model.fromJson(data);
+        if (myDiagram.nodes.any(n => !n.location.isReal())) layoutAll();
+      })
+      .catch(error => console.error('Error loading map:', error));
+    };
+    fileInput.click();
+  }
+
+  let loadingInterval;
+
+  function startLoadingAnimation() {
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    let dots = 0;
+    loadingIndicator.textContent = 'Loading';
+    loadingInterval = setInterval(() => {
+      dots = (dots + 1) % 4;
+      loadingIndicator.textContent = 'Loading' + '.'.repeat(dots);
+    }, 500);
+  }
+
+  function stopLoadingAnimation() {
+    clearInterval(loadingInterval);
+  }
+
+  function uploadFile(event) {
+    event.preventDefault();
+    const fileInput = document.getElementById('fileInput');
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    loadingIndicator.style.display = 'inline';
+    startLoadingAnimation();
+
+    const submitButton = document.querySelector('form button[type="submit"]');
+    submitButton.disabled = true;
+
+    fetch('/generate', {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+      myDiagram.model = go.Model.fromJson(data);
+      if (myDiagram.nodes.any(n => !n.location.isReal())) layoutAll();
+      loadingIndicator.style.display = 'none';
+      stopLoadingAnimation();
+      submitButton.disabled = false;
+    })
+    .catch(error => {
+      console.error('Error uploading file:', error);
+      loadingIndicator.style.display = 'none';
+      stopLoadingAnimation();
+      submitButton.disabled = false;
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', init);
+</script>
+
+<div id="myDiagramDiv" style="border: 1px solid black; width: 100%; height: 600px;"></div>
+
+<button id="saveBtn" onclick="save()">Save</button>
+<button onclick="load()">Load</button>
+<button onclick="layoutAll()">Layout</button>
+
+<form id="uploadForm" onsubmit="uploadFile(event)">
+    <input type="file" id="fileInput" accept=".txt,.pdf"><br>
+    <button type="submit">Mind Map</button>
+    <span id="loadingIndicator">Loading</span>
+</form>
+
+</body>
+</html>

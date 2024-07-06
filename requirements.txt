@@ -1,0 +1,4 @@
+Flask
+requests
+pymupdf
+google-cloud-aiplatform
