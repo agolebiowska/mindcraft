@@ -309,6 +309,48 @@
     clearInterval(loadingInterval);
   }
 
+  function translateContent(event) {
+    event.preventDefault();
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const translateBtn = document.getElementById('translateBtn');
+    const submitButton = document.getElementById('generateBtn');
+    translateBtn.disabled = true;
+    submitButton.disabled = true;
+    errorBox.textContent = '';
+    errorBox.style.display = 'none';
+    loadingIndicator.style.display = 'inline';
+    startLoadingAnimation();
+
+    const mapData = myDiagram.model.toJson();
+
+    fetch('/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: mapData }), 
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        myDiagram.model = go.Model.fromJson(data);
+        if (myDiagram.nodes.any(n => !n.location.isReal())) layoutAll();
+    })
+    .catch(error => {
+        errorBox.textContent = "An error occurred during translating. Please try again.";
+        errorBox.style.display = 'block';
+        console.error('Error:', error); 
+    })
+    .finally(() => {
+      loadingIndicator.style.display = 'none';
+      submitButton.disabled = false;
+      translateBtn.disabled = false;
+      stopLoadingAnimation();
+    }); 
+  }
+
   function generate(event) {
     event.preventDefault();
     const fileInput = document.getElementById('fileInput');
@@ -371,12 +413,13 @@
 <button id="saveBtn" onclick="save()">Save</button>
 <button onclick="load()">Load</button>
 <button onclick="layoutAll()">Layout</button>
+<button id="translateBtn" onclick="translateContent(event)">Translate</button>
 
 <form id="uploadForm" onsubmit="generate(event)">
     <input type="file" id="fileInput" accept=".txt,.pdf"><br>
     <textarea id="textInput" placeholder="Paste your text here..." style="resize: both;"></textarea><br>
     <div id="errorBox" role="alert" style="display: none;"></div> <div id="loadingIndicator" style="display: none;">Loading</div>
-    <button type="submit">Mind Map</button>
+    <button id="generateBtn" type="submit">Mind Map</button>
 </form>
 
 </body>

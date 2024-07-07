@@ -111,6 +111,44 @@ def generate_mind_map(content):
         logger.error(f"Error generating mind map: {e}")
         raise
 
+def translate_mind_map(content):
+    prompt = """Jesteś profesorem nauk lingwistycznych, twoich zadaniem jest przetłumaczyć zawartość tekstową podanej mapy myśli na język Polski, nie naruszając struktury mapy. 
+    Wykorzystane słownictwo powinno posiadać wydźwięk podobny do oryginalnego tekstu. Zwróć nienaruszoną w strukturze mapę myśli z przetumaczoną zawartością w formacie JSON.
+    Oryginalne, angielskie wersje nazw własnych i naukowych pozostawiaj w nawiasach obok tłumaczenia. 
+
+    Mapa myśli do przetłumaczenia:
+    {content}
+    """
+
+    formatted_prompt = textwrap.dedent(prompt).format(content=content)
+    logger.debug(f"Formatted prompt: {formatted_prompt}")
+
+    model = GenerativeModel(MODEL_ID)
+    generation_config = {
+        "max_output_tokens": 8192,
+        "temperature": 0.3,
+        "top_p": 0.95,
+    }
+    safety_settings = {
+        generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    }
+    
+    try:
+        response = model.generate_content(
+            [formatted_prompt],
+            generation_config=generation_config,
+            safety_settings=safety_settings
+        )
+        response_text = response.text.replace("```json", "").replace("```", "")
+        logger.debug(f"Translated mind map data: {response_text}")
+        return response_text
+    except Exception as e:
+        logger.error(f"Error generating mind map: {e}")
+        raise
+    
 
 @app.route('/')
 def index():
@@ -152,6 +190,31 @@ def generate():
             return jsonify({'error': str(e)}), 500
     else:
         return jsonify({'error': 'No file or text input provided'}), 400
+    
+
+@app.route('/translate', methods=['POST'])
+def translate():
+    logger.debug("Received a request to translate a mind map.")
+
+    try:
+        request_data = request.get_json()
+        mind_map_content = request_data.get('content')
+
+        if not mind_map_content:
+            return jsonify({'error': 'Mind map content not provided'}), 400
+
+        translated_data = translate_mind_map(mind_map_content)
+        logger.debug(f"Translated data: {translated_data[:50]}...") 
+
+        try:
+            translated_json = json.loads(translated_data)
+            return jsonify(translated_json)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing translated data: {e}")
+            return jsonify({'error': 'Invalid JSON in translated data'}), 500
+    except Exception as e:
+        logger.error(f"Error translating mind map: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
     
 
 @app.route('/load_map', methods=['POST'])
