@@ -309,52 +309,74 @@
     clearInterval(loadingInterval);
   }
 
-  function uploadFile(event) {
+  function generate(event) {
     event.preventDefault();
     const fileInput = document.getElementById('fileInput');
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-
+    const textInput = document.getElementById('textInput');
+    const errorBox = document.getElementById('errorBox');
     const loadingIndicator = document.getElementById('loadingIndicator');
-    loadingIndicator.style.display = 'inline';
-    startLoadingAnimation();
+    const submitButton = event.target.querySelector('button[type="submit"]');
 
-    const submitButton = document.querySelector('form button[type="submit"]');
+    errorBox.textContent = '';
+    errorBox.style.display = 'none';
+
+    if (fileInput.files.length === 0 && textInput.value.trim().length < 60) {
+      errorBox.textContent = "Please provide either a file or at least 60 characters of text.";
+      errorBox.style.display = 'block';
+      return;
+    }
+
+    const formData = new FormData();
+    if (fileInput.files.length > 0) {
+      formData.append('file', fileInput.files[0]);
+    } else {
+      formData.append('text', textInput.value.trim()); 
+    }
+
+    loadingIndicator.style.display = 'inline';
     submitButton.disabled = true;
+    startLoadingAnimation();
 
     fetch('/generate', {
       method: 'POST',
       body: formData
     })
-    .then(response => response.json())
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      return response.json();
+    })
     .then(data => {
       myDiagram.model = go.Model.fromJson(data);
       if (myDiagram.nodes.any(n => !n.location.isReal())) layoutAll();
-      loadingIndicator.style.display = 'none';
-      stopLoadingAnimation();
-      submitButton.disabled = false;
     })
     .catch(error => {
-      console.error('Error uploading file:', error);
+      errorBox.textContent = "An error occurred during processing. Please try again.";
+      errorBox.style.display = 'block';
+      console.error('Error:', error); 
+    })
+    .finally(() => {
       loadingIndicator.style.display = 'none';
-      stopLoadingAnimation();
       submitButton.disabled = false;
+      stopLoadingAnimation();
     });
   }
 
   window.addEventListener('DOMContentLoaded', init);
 </script>
 
-<div id="myDiagramDiv" style="border: 1px solid black; width: 100%; height: 600px;"></div>
+<div id="myDiagramDiv" style="border: 1px solid black; width: 100%; height: 85vh;"></div>
 
 <button id="saveBtn" onclick="save()">Save</button>
 <button onclick="load()">Load</button>
 <button onclick="layoutAll()">Layout</button>
 
-<form id="uploadForm" onsubmit="uploadFile(event)">
+<form id="uploadForm" onsubmit="generate(event)">
     <input type="file" id="fileInput" accept=".txt,.pdf"><br>
+    <textarea id="textInput" placeholder="Paste your text here..." style="resize: both;"></textarea><br>
+    <div id="errorBox" role="alert" style="display: none;"></div> <div id="loadingIndicator" style="display: none;">Loading</div>
     <button type="submit">Mind Map</button>
-    <span id="loadingIndicator">Loading</span>
 </form>
 
 </body>

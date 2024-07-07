@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
 import os
 import requests
 import fitz
@@ -87,7 +88,7 @@ def generate_mind_map(content):
     model = GenerativeModel(MODEL_ID)
     generation_config = {
         "max_output_tokens": 8192,
-        "temperature": 0.3,
+        "temperature": 0.4,
         "top_p": 0.95,
     }
     safety_settings = {
@@ -119,19 +120,38 @@ def index():
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    file = request.files['file']
+    logger.debug("Received a request to generate a mind map.")
+
+    file = request.files.get('file')
+    text = request.form.get('text')
+
     if file:
         try:
+            filename = secure_filename(file.filename)
+            logger.debug(f"Processing file: {filename}")
+
             file_content = extract_content_from_file(file)
             generated_data = generate_mind_map(file_content)
             logger.debug(f"Raw generated data: {generated_data}")
+
             mind_map_data = json.loads(generated_data)
             logger.debug("Parsed mind map data: {mind_map_data}")
+
             return jsonify(mind_map_data)
         except Exception as e:
             logger.error(f"Error processing uploaded file: {e}")
             return jsonify({'error': str(e)}), 500
-    return jsonify({'error': 'No file uploaded'}), 400
+    elif text:
+        try:
+            logger.debug(f"Processing text input: {text[:50]}...")
+            generated_data = generate_mind_map(text)  
+            mind_map_data = json.loads(generated_data)
+            return jsonify(mind_map_data)
+        except Exception as e:
+            logger.error(f"Error processing text input: {e}")
+            return jsonify({'error': str(e)}), 500
+    else:
+        return jsonify({'error': 'No file or text input provided'}), 400
     
 
 @app.route('/load_map', methods=['POST'])
